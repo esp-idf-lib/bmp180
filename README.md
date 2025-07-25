@@ -11,7 +11,7 @@ Driver for BMP180 digital pressure sensor.
 ## Installation
 
 ```sh
-idf.py add-dependency "esp-idf-lib/bmp180^1.0.0
+idf.py add-dependency esp-idf-lib/bmp180^1.0.0
 ```
 
 ## Support
