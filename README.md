@@ -1,5 +1,9 @@
 # esp-idf-lib/bmp180
 
+[![Build examples](https://github.com/esp-idf-lib/bmp180/actions/workflows//build.yml/badge.svg)](https://github.com/esp-idf-lib/bmp180/actions/workflows//build.yml)
+[![Build docs](https://github.com/esp-idf-lib/bmp180/actions/workflows//build-docs.yml/badge.svg)](https://github.com/esp-idf-lib/bmp180/actions/workflows//build-docs.yml)
+[![Validation](https://github.com/esp-idf-lib/bmp180/actions/workflows//validate-component.yml/badge.svg)](https://github.com/esp-idf-lib/bmp180/actions/workflows//validate-component.yml)
+
 Driver for BMP180 digital pressure sensor.
 
 * [Documentation](https://esp-idf-lib.github.io/bmp180/)
@@ -11,7 +15,7 @@ Driver for BMP180 digital pressure sensor.
 ## Installation
 
 ```sh
-idf.py add-dependency esp-idf-lib/bmp180^1.0.0
+idf.py add-dependency esp-idf-lib/bmp180
 ```
 
 ## Support
