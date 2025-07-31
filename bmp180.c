@@ -185,10 +185,10 @@ esp_err_t bmp180_init(bmp180_dev_t *dev)
     ESP_LOGD(TAG, "B1:=%d B2:=%d", dev->B1, dev->B2);
     ESP_LOGD(TAG, "MB:=%d MC:=%d MD:=%d", dev->MB, dev->MC, dev->MD);
 
-    if (dev->AC1== 0  || dev->AC2 == 0 || dev->AC3 == 0 ||
-        dev->AC4 == 0 || dev->AC5 == 0 || dev->AC6 == 0 ||
-        dev->B1  == 0 || dev->B2  == 0 ||
-        dev->MB  == 0 || dev->MC  == 0 || dev->MD  == 0)
+    if (dev->AC1 == 0  || dev->AC2 == 0 || dev->AC3 == 0 ||
+            dev->AC4 == 0 || dev->AC5 == 0 || dev->AC6 == 0 ||
+            dev->B1  == 0 || dev->B2  == 0 ||
+            dev->MB  == 0 || dev->MC  == 0 || dev->MD  == 0)
     {
         return ESP_ERR_INVALID_RESPONSE;
     }
