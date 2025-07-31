@@ -1,7 +1,7 @@
 ---
 name: bmp180
 description: Driver for BMP180 digital pressure sensor
-version: 1.0.6
+version: 1.0.7
 groups:
   - pressure
   - temperature
