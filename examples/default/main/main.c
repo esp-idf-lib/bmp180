@@ -27,10 +27,6 @@ void bmp180_test(void *pvParameters)
         if (res != ESP_OK)
             printf("Could not measure: %d\n", res);
         else
-            /* float is used in printf(). you need non-default configuration in
-             * sdkconfig for ESP8266, which is enabled by default for this
-             * example. see sdkconfig.defaults.esp8266
-             */
             printf("Temperature: %.2f degrees Celsius; Pressure: %" PRIu32 " Pa\n", temp, pressure);
 
         vTaskDelay(pdMS_TO_TICKS(500));
