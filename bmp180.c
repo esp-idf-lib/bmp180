@@ -239,7 +239,7 @@ esp_err_t bmp180_init(bmp180_dev_t *dev)
 
 esp_err_t bmp180_measure(bmp180_dev_t *dev, float *temperature, uint32_t *pressure, bmp180_mode_t oss)
 {
-    CHECK_ARG(dev && temperature && pressure);
+    CHECK_ARG(dev && (temperature || pressure));
     CHECK_ARG(oss >= BMP180_MODE_ULTRA_LOW_POWER && oss <= BMP180_MODE_ULTRA_HIGH_RESOLUTION);
 
     I2C_DEV_TAKE_MUTEX(&dev->i2c_dev);
@@ -247,12 +247,10 @@ esp_err_t bmp180_measure(bmp180_dev_t *dev, float *temperature, uint32_t *pressu
     // Temperature is always needed, also required for pressure only.
     //
     // Calculation taken from BMP180 Datasheet
-    int32_t T, P;
-    int32_t UT, X1, X2, B5;
-    UT = 0;
+    int32_t UT;
     I2C_DEV_CHECK(&dev->i2c_dev, bmp180_get_uncompensated_temperature(&dev->i2c_dev, &UT));
 
-    X1 = ((UT - (int32_t)dev->AC6) * (int32_t)dev->AC5) >> 15;
+    int32_t X1 = ((UT - (int32_t)dev->AC6) * (int32_t)dev->AC5) >> 15;
 
     int32_t divisor = X1 + (int32_t)dev->MD;
     if (!divisor)
@@ -262,9 +260,9 @@ esp_err_t bmp180_measure(bmp180_dev_t *dev, float *temperature, uint32_t *pressu
         return ESP_ERR_INVALID_RESPONSE;
     }
 
-    X2 = ((int32_t)dev->MC << 11) / divisor;
-    B5 = X1 + X2;
-    T = (B5 + 8) >> 4;
+    int32_t X2 = ((int32_t)dev->MC << 11) / divisor;
+    int32_t B5 = X1 + X2;
+    int32_t T = (B5 + 8) >> 4;
 
     if (temperature)
         *temperature = T / 10.0;
@@ -273,22 +271,21 @@ esp_err_t bmp180_measure(bmp180_dev_t *dev, float *temperature, uint32_t *pressu
 
     if (pressure)
     {
-        int32_t X3, B3, B6;
-        uint32_t B4, B7, UP = 0;
-
+        uint32_t UP;
         I2C_DEV_CHECK(&dev->i2c_dev, bmp180_get_uncompensated_pressure(&dev->i2c_dev, oss, &UP));
 
         // Calculation taken from BMP180 Datasheet
-        B6 = B5 - 4000;
+        int32_t B6 = B5 - 4000;
         X1 = ((int32_t)dev->B2 * ((B6 * B6) >> 12)) >> 11;
         X2 = ((int32_t)dev->AC2 * B6) >> 11;
-        X3 = X1 + X2;
+        int32_t X3 = X1 + X2;
 
-        B3 = ((((int32_t)dev->AC1 * 4 + X3) << oss) + 2) >> 2;
+        int32_t B3 = ((((int32_t)dev->AC1 * 4 + X3) << oss) + 2) >> 2;
         X1 = ((int32_t)dev->AC3 * B6) >> 13;
         X2 = ((int32_t)dev->B1 * ((B6 * B6) >> 12)) >> 16;
         X3 = ((X1 + X2) + 2) >> 2;
-        B4 = ((uint32_t)dev->AC4 * (uint32_t)(X3 + 32768)) >> 15;
+
+        uint32_t B4 = ((uint32_t)dev->AC4 * (uint32_t)(X3 + 32768)) >> 15;
         if (!B4)
         {
             I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
@@ -296,17 +293,18 @@ esp_err_t bmp180_measure(bmp180_dev_t *dev, float *temperature, uint32_t *pressu
             return ESP_ERR_INVALID_RESPONSE;
         }
 
-        B7 = ((uint32_t)UP - (uint32_t)B3) * (uint32_t)(50000UL >> oss);
+        uint32_t B7 = ((uint32_t)UP - (uint32_t)B3) * (uint32_t)(50000UL >> oss);
 
+        int32_t P;
         if (B7 < 0x80000000UL)
-            P = (B7 * 2) / B4;
+            P = (int32_t)((B7 * 2) / B4);
         else
-            P = (B7 / B4) * 2;
+            P = (int32_t)((B7 / B4) * 2);
 
         X1 = (P >> 8) * (P >> 8);
         X1 = (X1 * 3038) >> 16;
         X2 = (-7357 * P) >> 16;
-        P = P + ((X1 + X2 + (int32_t)3791) >> 4);
+        P = P + ((X1 + X2 + 3791) >> 4);
 
         if (P <= 0)
         {
@@ -315,7 +313,7 @@ esp_err_t bmp180_measure(bmp180_dev_t *dev, float *temperature, uint32_t *pressu
             return ESP_ERR_INVALID_RESPONSE;
         }
 
-        *pressure = P;
+        *pressure = (uint32_t)P;
 
         ESP_LOGD(TAG, "P:= %" PRIi32, P);
     }
