@@ -201,6 +201,7 @@ esp_err_t bmp180_init(bmp180_dev_t *dev)
 esp_err_t bmp180_measure(bmp180_dev_t *dev, float *temperature, uint32_t *pressure, bmp180_mode_t oss)
 {
     CHECK_ARG(dev && temperature && pressure);
+    CHECK_ARG(oss >= BMP180_MODE_ULTRA_LOW_POWER && oss <= BMP180_MODE_ULTRA_HIGH_RESOLUTION);
 
     I2C_DEV_TAKE_MUTEX(&dev->i2c_dev);
 
@@ -213,7 +214,16 @@ esp_err_t bmp180_measure(bmp180_dev_t *dev, float *temperature, uint32_t *pressu
     I2C_DEV_CHECK(&dev->i2c_dev, bmp180_get_uncompensated_temperature(&dev->i2c_dev, &UT));
 
     X1 = ((UT - (int32_t)dev->AC6) * (int32_t)dev->AC5) >> 15;
-    X2 = ((int32_t)dev->MC << 11) / (X1 + (int32_t)dev->MD);
+
+    int32_t divisor = X1 + (int32_t)dev->MD;
+    if (!divisor)
+    {
+        I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
+        ESP_LOGE(TAG, "Invalid calibration data: division by zero");
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    X2 = ((int32_t)dev->MC << 11) / divisor;
     B5 = X1 + X2;
     T = (B5 + 8) >> 4;
 
@@ -240,7 +250,14 @@ esp_err_t bmp180_measure(bmp180_dev_t *dev, float *temperature, uint32_t *pressu
         X2 = ((int32_t)dev->B1 * ((B6 * B6) >> 12)) >> 16;
         X3 = ((X1 + X2) + 2) >> 2;
         B4 = ((uint32_t)dev->AC4 * (uint32_t)(X3 + 32768)) >> 15;
-        B7 = ((uint32_t)UP - B3) * (uint32_t)(50000UL >> oss);
+        if (!B4)
+        {
+            I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
+            ESP_LOGE(TAG, "Invalid calibration data: division by zero");
+            return ESP_ERR_INVALID_RESPONSE;
+        }
+
+        B7 = ((uint32_t)UP - (uint32_t)B3) * (uint32_t)(50000UL >> oss);
 
         if (B7 < 0x80000000UL)
             P = (B7 * 2) / B4;
@@ -251,6 +268,13 @@ esp_err_t bmp180_measure(bmp180_dev_t *dev, float *temperature, uint32_t *pressu
         X1 = (X1 * 3038) >> 16;
         X2 = (-7357 * P) >> 16;
         P = P + ((X1 + X2 + (int32_t)3791) >> 4);
+
+        if (P <= 0)
+        {
+            I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
+            ESP_LOGE(TAG, "Invalid pressure: %" PRIi32 " Pa", P);
+            return ESP_ERR_INVALID_RESPONSE;
+        }
 
         *pressure = P;
 
