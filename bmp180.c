@@ -265,7 +265,7 @@ esp_err_t bmp180_measure(bmp180_dev_t *dev, float *temperature, uint32_t *pressu
     int32_t T = (B5 + 8) >> 4;
 
     if (temperature)
-        *temperature = T / 10.0;
+        *temperature = T / 10.0f;
 
     ESP_LOGD(TAG, "T:= %" PRIi32 ".%d", T / 10, abs(T % 10));
 

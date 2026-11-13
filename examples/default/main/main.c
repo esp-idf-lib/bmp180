@@ -25,7 +25,7 @@ void bmp180_test(void *pvParameters)
 
         esp_err_t res = bmp180_measure(&dev, &temp, &pressure, BMP180_MODE_STANDARD);
         if (res != ESP_OK)
-            printf("Could not measure: %d\n", res);
+            printf("Could not measure: %s\n", esp_err_to_name(res));
         else
             printf("Temperature: %.2f degrees Celsius; Pressure: %" PRIu32 " Pa\n", temp, pressure);
 
