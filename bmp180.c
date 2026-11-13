@@ -44,21 +44,17 @@
 #include <esp_rom_sys.h>
 #include <esp_idf_lib_helpers.h>
 
-#define I2C_FREQ_HZ 1000000 // Max 1MHz for esp-idf
+#define I2C_FREQ_HZ 1000000 // The datasheet allows up to 3.4 MHz
 
 static const char *TAG = "bmp180";
-
-#define BMP180_RX_QUEUE_SIZE      10
-#define BMP180_TASK_PRIORITY      9
 
 #define BMP180_VERSION_REG        0xD0
 #define BMP180_CONTROL_REG        0xF4
 #define BMP180_RESET_REG          0xE0
 #define BMP180_OUT_MSB_REG        0xF6
-#define BMP180_OUT_LSB_REG        0xF7
-#define BMP180_OUT_XLSB_REG       0xF8
 
 #define BMP180_CALIBRATION_REG    0xAA
+#define BMP180_CALIBRATION_SIZE   22
 
 // Values for BMP180_CONTROL_REG
 #define BMP180_MEASURE_TEMP       0x2E
@@ -73,6 +69,10 @@ static const char *TAG = "bmp180";
 // Reset value for BMP180_RESET_REG
 #define BMP180_RESET_VALUE        0xB6
 
+// The reset runs the power-on sequence; the datasheet does not specify the
+// time, Zephyr waits 2 ms
+#define BMP180_RESET_DELAY_MS     2
+
 // Conversion polling
 #define BMP180_POLL_DELAY_US      500
 #define BMP180_POLL_MARGIN_US     10000
@@ -84,12 +84,17 @@ static const uint32_t bmp180_press_conversion_us[] = { 4500, 7500, 13500, 25500 
 #define CHECK(x) do { esp_err_t __; if ((__ = x) != ESP_OK) return __; } while (0)
 #define CHECK_ARG(VAL) do { if (!(VAL)) return ESP_ERR_INVALID_ARG; } while (0)
 
+static int16_t bmp180_be16(const uint8_t *p)
+{
+    return (int16_t)(((uint16_t)p[0] << 8) | p[1]);
+}
+
 static esp_err_t bmp180_read_reg_16(i2c_dev_t *dev, uint8_t reg, int16_t *r)
 {
     uint8_t d[] = { 0, 0 };
 
-    CHECK(i2c_dev_read_reg(dev, reg, d, 2));
-    *r = ((int16_t)d[0] << 8) | (d[1]);
+    CHECK(i2c_dev_read_reg(dev, reg, d, sizeof(d)));
+    *r = bmp180_be16(d);
 
     return ESP_OK;
 }
@@ -170,10 +175,28 @@ esp_err_t bmp180_free_desc(bmp180_dev_t *dev)
     return i2c_dev_delete_mutex(&dev->i2c_dev);
 }
 
+esp_err_t bmp180_reset(bmp180_dev_t *dev)
+{
+    CHECK_ARG(dev);
+
+    I2C_DEV_TAKE_MUTEX(&dev->i2c_dev);
+
+    uint8_t value = BMP180_RESET_VALUE;
+    I2C_DEV_CHECK(&dev->i2c_dev, i2c_dev_write_reg(&dev->i2c_dev, BMP180_RESET_REG, &value, 1));
+
+    I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
+
+    TickType_t delay = pdMS_TO_TICKS(BMP180_RESET_DELAY_MS);
+    vTaskDelay(delay ? delay : 1);
+
+    return ESP_OK;
+}
+
 esp_err_t bmp180_init(bmp180_dev_t *dev)
 {
     CHECK_ARG(dev);
 
+    CHECK(bmp180_reset(dev));
 
     I2C_DEV_TAKE_MUTEX(&dev->i2c_dev);
 
@@ -186,31 +209,28 @@ esp_err_t bmp180_init(bmp180_dev_t *dev)
         return ESP_ERR_NOT_FOUND;
     }
 
-    I2C_DEV_CHECK(&dev->i2c_dev, bmp180_read_reg_16(&dev->i2c_dev, BMP180_CALIBRATION_REG + 0, &dev->AC1));
-    I2C_DEV_CHECK(&dev->i2c_dev, bmp180_read_reg_16(&dev->i2c_dev, BMP180_CALIBRATION_REG + 2, &dev->AC2));
-    I2C_DEV_CHECK(&dev->i2c_dev, bmp180_read_reg_16(&dev->i2c_dev, BMP180_CALIBRATION_REG + 4, &dev->AC3));
-    I2C_DEV_CHECK(&dev->i2c_dev, bmp180_read_reg_16(&dev->i2c_dev, BMP180_CALIBRATION_REG + 6, (int16_t *)&dev->AC4));
-    I2C_DEV_CHECK(&dev->i2c_dev, bmp180_read_reg_16(&dev->i2c_dev, BMP180_CALIBRATION_REG + 8, (int16_t *)&dev->AC5));
-    I2C_DEV_CHECK(&dev->i2c_dev, bmp180_read_reg_16(&dev->i2c_dev, BMP180_CALIBRATION_REG + 10, (int16_t *)&dev->AC6));
-    I2C_DEV_CHECK(&dev->i2c_dev, bmp180_read_reg_16(&dev->i2c_dev, BMP180_CALIBRATION_REG + 12, &dev->B1));
-    I2C_DEV_CHECK(&dev->i2c_dev, bmp180_read_reg_16(&dev->i2c_dev, BMP180_CALIBRATION_REG + 14, &dev->B2));
-    I2C_DEV_CHECK(&dev->i2c_dev, bmp180_read_reg_16(&dev->i2c_dev, BMP180_CALIBRATION_REG + 16, &dev->MB));
-    I2C_DEV_CHECK(&dev->i2c_dev, bmp180_read_reg_16(&dev->i2c_dev, BMP180_CALIBRATION_REG + 18, &dev->MC));
-    I2C_DEV_CHECK(&dev->i2c_dev, bmp180_read_reg_16(&dev->i2c_dev, BMP180_CALIBRATION_REG + 20, &dev->MD));
+    // The coefficients are read at once so that a failed transaction cannot
+    // mix the values of two reads
+    uint8_t cal[BMP180_CALIBRATION_SIZE];
+    I2C_DEV_CHECK(&dev->i2c_dev, i2c_dev_read_reg(&dev->i2c_dev, BMP180_CALIBRATION_REG, cal, sizeof(cal)));
+
+    dev->AC1 = bmp180_be16(&cal[0]);
+    dev->AC2 = bmp180_be16(&cal[2]);
+    dev->AC3 = bmp180_be16(&cal[4]);
+    dev->AC4 = (uint16_t)bmp180_be16(&cal[6]);
+    dev->AC5 = (uint16_t)bmp180_be16(&cal[8]);
+    dev->AC6 = (uint16_t)bmp180_be16(&cal[10]);
+    dev->B1 = bmp180_be16(&cal[12]);
+    dev->B2 = bmp180_be16(&cal[14]);
+    dev->MB = bmp180_be16(&cal[16]);
+    dev->MC = bmp180_be16(&cal[18]);
+    dev->MD = bmp180_be16(&cal[20]);
 
     I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
 
     ESP_LOGD(TAG, "AC1:=%d AC2:=%d AC3:=%d AC4:=%u AC5:=%u AC6:=%u", dev->AC1, dev->AC2, dev->AC3, dev->AC4, dev->AC5, dev->AC6);
     ESP_LOGD(TAG, "B1:=%d B2:=%d", dev->B1, dev->B2);
     ESP_LOGD(TAG, "MB:=%d MC:=%d MD:=%d", dev->MB, dev->MC, dev->MD);
-
-    if (dev->AC1 == 0  || dev->AC2 == 0 || dev->AC3 == 0 ||
-            dev->AC4 == 0 || dev->AC5 == 0 || dev->AC6 == 0 ||
-            dev->B1  == 0 || dev->B2  == 0 ||
-            dev->MB  == 0 || dev->MC  == 0 || dev->MD  == 0)
-    {
-        return ESP_ERR_INVALID_RESPONSE;
-    }
 
     return ESP_OK;
 }
