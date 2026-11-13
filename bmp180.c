@@ -36,9 +36,12 @@
  */
 #include "bmp180.h"
 #include <inttypes.h>
+#include <stdlib.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <esp_err.h>
 #include <esp_log.h>
-#include <ets_sys.h>
+#include <esp_rom_sys.h>
 #include <esp_idf_lib_helpers.h>
 
 #define I2C_FREQ_HZ 1000000 // Max 1MHz for esp-idf
@@ -61,11 +64,22 @@ static const char *TAG = "bmp180";
 #define BMP180_MEASURE_TEMP       0x2E
 #define BMP180_MEASURE_PRESS      0x34
 
+// Sco bit of BMP180_CONTROL_REG, stays 1 while the conversion is in progress
+#define BMP180_CONTROL_SCO        BIT(5)
+
 // CHIP ID stored in BMP180_VERSION_REG
 #define BMP180_CHIP_ID            0x55
 
 // Reset value for BMP180_RESET_REG
 #define BMP180_RESET_VALUE        0xB6
+
+// Conversion polling
+#define BMP180_POLL_DELAY_US      500
+#define BMP180_POLL_MARGIN_US     10000
+
+// Max conversion time, datasheet table 3
+#define BMP180_TEMP_CONVERSION_US  4500
+static const uint32_t bmp180_press_conversion_us[] = { 4500, 7500, 13500, 25500 };
 
 #define CHECK(x) do { esp_err_t __; if ((__ = x) != ESP_OK) return __; } while (0)
 #define CHECK_ARG(VAL) do { if (!(VAL)) return ESP_ERR_INVALID_ARG; } while (0)
@@ -80,51 +94,56 @@ static esp_err_t bmp180_read_reg_16(i2c_dev_t *dev, uint8_t reg, int16_t *r)
     return ESP_OK;
 }
 
-static inline esp_err_t bmp180_start_measurement(i2c_dev_t *dev, uint8_t cmd)
+static esp_err_t bmp180_wait_conversion(i2c_dev_t *dev, uint32_t conversion_us)
 {
-    return i2c_dev_write_reg(dev, BMP180_CONTROL_REG, &cmd, 1);
+    uint32_t timeout_us = conversion_us + BMP180_POLL_MARGIN_US;
+    uint32_t elapsed_us = 0;
+
+    while (true)
+    {
+        uint8_t ctrl;
+        CHECK(i2c_dev_read_reg(dev, BMP180_CONTROL_REG, &ctrl, 1));
+        if (!(ctrl & BMP180_CONTROL_SCO))
+            return ESP_OK;
+
+        if (elapsed_us >= timeout_us)
+        {
+            ESP_LOGE(TAG, "The conversion did not finish in %" PRIu32 " us", timeout_us);
+            return ESP_ERR_TIMEOUT;
+        }
+
+        esp_rom_delay_us(BMP180_POLL_DELAY_US);
+        elapsed_us += BMP180_POLL_DELAY_US;
+    }
+}
+
+static esp_err_t bmp180_start_measurement(i2c_dev_t *dev, uint8_t cmd, uint32_t conversion_us)
+{
+    CHECK(i2c_dev_write_reg(dev, BMP180_CONTROL_REG, &cmd, 1));
+
+    return bmp180_wait_conversion(dev, conversion_us);
 }
 
 static esp_err_t bmp180_get_uncompensated_temperature(i2c_dev_t *dev, int32_t *ut)
 {
-    // Write Start Code into reg 0xF4.
-    CHECK(bmp180_start_measurement(dev, BMP180_MEASURE_TEMP));
-
-    // Wait 5ms, datasheet states 4.5ms
-    ets_delay_us(5000);
+    CHECK(bmp180_start_measurement(dev, BMP180_MEASURE_TEMP, BMP180_TEMP_CONVERSION_US));
 
     int16_t v;
     CHECK(bmp180_read_reg_16(dev, BMP180_OUT_MSB_REG, &v));
     *ut = v;
+
     return ESP_OK;
 }
 
 static esp_err_t bmp180_get_uncompensated_pressure(i2c_dev_t *dev, bmp180_mode_t oss, uint32_t *up)
 {
-    uint16_t us;
-
-    // Limit oss and set the measurement wait time. The datasheet
-    // states 4.5, 7.5, 13.5, 25.5ms for oss 0 to 3.
-    switch (oss)
-    {
-        case BMP180_MODE_ULTRA_LOW_POWER:                 us = 5000; break;
-        case BMP180_MODE_STANDARD:                        us = 8000; break;
-        case BMP180_MODE_HIGH_RESOLUTION:                 us = 14000; break;
-        default: oss = BMP180_MODE_ULTRA_HIGH_RESOLUTION; us = 26000; break;
-    }
-
-    // Write Start Code into reg 0xF4
-    CHECK(bmp180_start_measurement(dev, BMP180_MEASURE_PRESS | (oss << 6)));
-
-    ets_delay_us(us);
+    CHECK(bmp180_start_measurement(dev, BMP180_MEASURE_PRESS | (oss << 6), bmp180_press_conversion_us[oss]));
 
     uint8_t d[] = { 0, 0, 0 };
-    uint8_t reg = BMP180_OUT_MSB_REG;
-    CHECK(i2c_dev_read_reg(dev, reg, d, 3));
+    CHECK(i2c_dev_read_reg(dev, BMP180_OUT_MSB_REG, d, sizeof(d)));
 
     uint32_t r = ((uint32_t)d[0] << 16) | ((uint32_t)d[1] << 8) | d[2];
-    r >>= 8 - oss;
-    *up = r;
+    *up = r >> (8 - oss);
 
     return ESP_OK;
 }
